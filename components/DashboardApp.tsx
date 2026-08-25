@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
-  Activity, ArrowDownRight, ArrowUpRight, BarChart3, Bell, ChevronDown,
+  Activity, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Bell, ChevronDown,
   CircleGauge, Clock3, Eye, Filter, HeartPulse, Inbox, LayoutDashboard,
   Menu, MessageSquareText, MousePointerClick, Route, Search, ShieldCheck,
   Sparkles, Target, UsersRound, X,
@@ -14,19 +14,23 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import {
-  DashboardFilters, MessageRecord, filterOptions, frictionSignals, messages,
+  DashboardFilters, MessageRecord, filterOptions, frictionSignals, messages, messageTimings,
   positionPerformance, scrollDepth, segmentRows, timeToOpen, trendPoints,
 } from '../lib/data';
 import {
   aggregateMetrics, filterMessages, filtersToQuery, formatCompact, formatPercent,
-  parseFilters, safeRate, weightedAverage,
+  formatSingaporeDateTime, getMessageById, parseFilters, safeRate,
+  topMessagesByEngagement, weightedAverage,
 } from '../lib/metrics';
 
-export type DashboardSection = 'overview' | 'messages' | 'behaviour' | 'journey' | 'segments' | 'health';
+export type DashboardSection = 'overview' | 'messages' | 'message-detail' | 'behaviour' | 'journey' | 'segments' | 'health';
 
-const navItems = [
+const primaryNavItems = [
   { href:'/', label:'Overview', icon:LayoutDashboard },
-  { href:'/messages', label:'Messages', icon:MessageSquareText },
+  { href:'/messages', label:'Delivered Messages', icon:MessageSquareText },
+];
+
+const analyticsNavItems = [
   { href:'/behaviour', label:'Behaviour', icon:BarChart3 },
   { href:'/journey', label:'Action journey', icon:Route },
   { href:'/segments', label:'Segments', icon:UsersRound },
@@ -35,7 +39,8 @@ const navItems = [
 
 const sectionCopy = {
   overview: ['Inbox intelligence', 'Message Inbox Analytics', 'Understand whether people notice, read and act on your messages.'],
-  messages: ['Campaign diagnostics', 'Message performance', 'Compare every campaign using meaningful exposure and conversion denominators.'],
+  messages: ['Delivery history', 'Delivered Messages', 'Review every message delivery and open its individual performance record.'],
+  'message-detail': ['Message diagnostics', 'Individual message performance', 'See when this message was opened and how quickly people acted.'],
   behaviour: ['Consumption signals', 'Reading behaviour', 'See how people consume content, where they stop, and whether they reach the CTA.'],
   journey: ['Before and after click', 'Action journey', 'Separate message effectiveness from downstream destination performance.'],
   segments: ['Audience intelligence', 'Segment comparison', 'Find who the inbox works for—and where the experience needs attention.'],
@@ -102,108 +107,110 @@ function StatCard({ label, value, delta, icon:Icon, note }: {
   </article>;
 }
 
-function Overview({ records }: { records:MessageRecord[] }) {
+function Overview({ records, query }: { records:MessageRecord[]; query:string }) {
   const metrics = aggregateMetrics(records, '30');
   if (!records.length) return <EmptyState/>;
-  const reach = metrics.exposureRate * .86;
-  const funnel = [
-    ['Delivered', metrics.delivered, 100],
-    ['Exposed', metrics.exposed, metrics.exposureRate],
-    ['Opened', metrics.opened, metrics.openRate],
-    ['Meaningful read', metrics.engaged, metrics.engagedRate],
-    ['CTA exposed', metrics.ctaExposed, metrics.ctaExposureRate],
-    ['CTA clicked', metrics.clicked, metrics.ctaRate],
-    ['Completed action', metrics.completed, metrics.conversionRate],
-  ] as const;
-  const max = metrics.delivered;
-  const best = [...records].sort((a,b) => safeRate(b.clicked,b.ctaExposed) - safeRate(a.clicked,a.ctaExposed)).slice(0,4);
+  const best = topMessagesByEngagement(records);
   return <>
-    <section className="kpi-grid" aria-label="Inbox health metrics">
-      <StatCard label="Inbox reach" value={formatPercent(reach)} delta={4.2} icon={Inbox}/>
-      <StatCard label="Open rate" value={formatPercent(metrics.openRate)} delta={-1.8} icon={Eye}/>
-      <StatCard label="Engaged rate" value={formatPercent(metrics.engagedRate)} delta={7.1} icon={Sparkles}/>
-      <StatCard label="CTA conversion" value={formatPercent(metrics.ctaRate)} delta={3.4} icon={MousePointerClick}/>
-      <StatCard label="Completed action" value={formatPercent(metrics.endToEndRate)} delta={2.2} icon={Target}/>
+    <section className="kpi-grid overview-kpis" aria-label="Inbox overview metrics">
+      <StatCard label="Delivered Messages" value={formatCompact(metrics.delivered)} delta={5.8} icon={Inbox} note={formatPercent(metrics.exposureRate)+' active-user reach'}/>
+      <StatCard label="Engagement Rate" value={formatPercent(metrics.engagementRate)} delta={4.2} icon={Eye} note="unique opens ÷ delivered"/>
+      <StatCard label="CTA Conversion" value={formatPercent(metrics.ctaConversionFromOpens)} delta={3.4} icon={MousePointerClick} note="clicks ÷ opens on CTA messages"/>
     </section>
-    <section className="overview-grid">
-      <Panel title="North-star outcome funnel" eyebrow="Business outcome" className="funnel-panel" action={<span className="soft-badge">30 days</span>}>
-        <div className="funnel-list">{funnel.map(([label,value,rate], index) => <div className="funnel-row" key={label}>
-          <div className="funnel-meta"><span>{label}</span><strong>{formatCompact(value)}</strong></div>
-          <div className="funnel-track"><span style={{width:String(Math.max(4,(value/max)*100))+'%'}}/></div>
-          <span className="funnel-rate">{index === 0 ? 'Baseline' : formatPercent(rate) + ' of prior'}</span>
-        </div>)}</div>
-        <div className="funnel-insight"><Sparkles size={15}/><p><strong>Best opportunity:</strong> open rate is down 1.8%. Improving exposure-to-open by two points would create roughly {formatCompact(metrics.exposed*.02)} more opens.</p></div>
-      </Panel>
-      <Panel title="Reach & engagement trend" eyebrow="Inbox usage" className="trend-panel" action={<span className="metric-highlight">71.4%</span>}>
-        <div className="chart-area">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={trendPoints} margin={{top:6,right:2,left:-25,bottom:0}}>
-              <defs><linearGradient id="reachFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4d82e7" stopOpacity={.26}/><stop offset="95%" stopColor="#4d82e7" stopOpacity={0}/></linearGradient></defs>
-              <CartesianGrid vertical={false} stroke="#eef1f5"/><XAxis dataKey="day" tickLine={false} axisLine={false} tick={{fontSize:9,fill:'#929aab'}} interval={2}/><YAxis tickLine={false} axisLine={false} tick={{fontSize:9,fill:'#929aab'}} domain={[50,80]}/>
-              <Tooltip contentStyle={tooltipStyle}/><Area type="monotone" dataKey="reach" stroke="#3976e8" strokeWidth={2} fill="url(#reachFill)"/>
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="mini-stats"><div><small>Inbox users</small><strong>482K</strong></div><div><small>Sessions / user</small><strong>2.8</strong></div><div><small>Revisit rate</small><strong>42%</strong></div></div>
-      </Panel>
-      <Panel title="Time to first open" eyebrow="Message decay">
-        <div className="distribution-list">{timeToOpen.map((item) => <div key={item.label} className="distribution-row">
-          <span>{item.label}</span><div><i style={{width:String(item.value*2.6)+'%'}}/></div><strong>{item.value}%</strong>
-        </div>)}</div>
-        <p className="panel-note"><Clock3 size={14}/>73% of messages that are opened receive their first open within 24 hours.</p>
-      </Panel>
-      <Panel title="Top message performance" eyebrow="Campaigns" action={<Link className="text-link" href="/messages">View all</Link>}>
-        <div className="compact-table"><div className="compact-head"><span>Message</span><span>Open</span><span>CTA</span></div>
-          {best.map((record) => <div className="compact-row" key={record.id}><span><i className={'type-dot ' + record.type.toLowerCase()}/>{record.name}</span><strong>{formatPercent(safeRate(record.opened,record.exposed),0)}</strong><strong>{formatPercent(safeRate(record.clicked,record.ctaExposed),0)}</strong></div>)}
-        </div>
-      </Panel>
-      <Panel title="Downstream conversion" eyebrow="After click">
-        <div className="step-flow">
-          {[['CTA clicks',metrics.clicked,100],['Page loaded',Math.round(metrics.clicked*.94),94],['Started action',Math.round(metrics.clicked*.71),71],['Completed',metrics.completed,safeRate(metrics.completed,metrics.clicked)]].map(([label,value,rate],index) => <div className="step-card" key={String(label)}>
-            <span className="step-number">{index+1}</span><small>{label}</small><strong>{formatCompact(Number(value))}</strong><em>{formatPercent(Number(rate),0)}</em>
-          </div>)}
-        </div>
-        <p className="panel-note warning"><ShieldCheck size={14}/>Destination completion is the largest remaining post-click drop-off.</p>
-      </Panel>
-      <Panel title="Inbox friction" eyebrow="Experience health" action={<span className="status-badge good">Stable</span>}>
-        <div className="friction-summary"><div className="friction-ring"><strong>3.5%</strong><span>of sessions</span></div>
-          <div className="friction-top">{frictionSignals.slice(0,3).map((signal) => <div key={signal.name}><span>{signal.name}</span><strong>{signal.share}%</strong></div>)}</div>
-        </div>
-        <Link className="panel-link" href="/health">See all friction and technical signals <ArrowUpRight size={13}/></Link>
-      </Panel>
-    </section>
+    <Panel title="Top 5 Message Performance" eyebrow="Ranked by engagement rate" className="ranking-panel" action={<Link className="text-link" href={'/messages'+(query?'?'+query:'')}>View delivery history</Link>}>
+      <div className="ranking-head"><span>Rank & message</span><span>Delivered</span><span>Engagement</span><span>CTA conversion</span></div>
+      <div className="ranking-list">{best.map((record,index) => {
+        const detailHref = '/messages/'+record.id+(query?'?'+query:'');
+        return <Link className="ranking-row" href={detailHref} key={record.id}>
+          <span className="rank-message"><b>{index+1}</b><i className={'message-icon '+record.type.toLowerCase()}><MessageSquareText size={14}/></i><span><strong>{record.name}</strong><small>{record.audience} · {record.type}</small></span></span>
+          <span>{formatCompact(record.delivered)}</span>
+          <strong>{formatPercent(safeRate(record.opened,record.delivered))}</strong>
+          <span className={record.hasCTA?'conversion-cell':'no-cta'}>{record.hasCTA?formatPercent(safeRate(record.clicked,record.opened)):'No CTA'}</span>
+        </Link>;
+      })}</div>
+      <p className="definition-note">Engagement is unique opens ÷ delivered. CTA conversion includes only messages with a CTA and uses opens as its denominator.</p>
+    </Panel>
   </>;
 }
 
-type SortKey = 'delivered' | 'openRate' | 'engagedRate' | 'ctaRate' | 'conversionRate' | 'unreadRate';
+type SortKey = 'newest' | 'delivered' | 'engagement' | 'ctaConversion';
 
-function MessagesPage({ records }: { records:MessageRecord[] }) {
-  const [query,setQuery] = useState('');
-  const [sort,setSort] = useState<SortKey>('delivered');
+function MessagesPage({ records, filtersQuery }: { records:MessageRecord[]; filtersQuery:string }) {
+  const [search,setSearch] = useState('');
+  const [sort,setSort] = useState<SortKey>('newest');
   const rows = useMemo(() => records
-    .filter((record) => record.name.toLowerCase().includes(query.toLowerCase()))
+    .filter((record) => [record.name,record.sender,record.audience].some((value) => value.toLowerCase().includes(search.toLowerCase())))
     .map((record) => ({
       ...record,
-      openRate:safeRate(record.opened,record.exposed),
-      engagedRate:safeRate(record.engaged,record.opened),
-      ctaRate:safeRate(record.clicked,record.ctaExposed),
-      conversionRate:safeRate(record.completed,record.clicked),
-      unreadRate:safeRate(record.unread,record.delivered),
-    })).sort((a,b) => Number(b[sort])-Number(a[sort])), [records,query,sort]);
-  return <Panel title="Campaign performance" eyebrow="One message per row" className="table-panel" action={<span className="record-count">{rows.length} campaigns</span>}>
+      engagement:safeRate(record.opened,record.delivered),
+      ctaConversion:record.hasCTA?safeRate(record.clicked,record.opened):-1,
+    })).sort((left,right) => {
+      if (sort === 'newest') return new Date(right.deliveredAt).getTime()-new Date(left.deliveredAt).getTime();
+      return Number(right[sort])-Number(left[sort]);
+    }), [records,search,sort]);
+  return <Panel title="Delivery history" eyebrow="Newest messages first" className="table-panel" action={<span className="record-count">{rows.length} messages</span>}>
     <div className="table-tools">
-      <label className="search-box"><Search size={15}/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Search campaigns" aria-label="Search campaigns"/></label>
-      <label className="sort-control">Sort by<select value={sort} onChange={(event)=>setSort(event.target.value as SortKey)}><option value="delivered">Delivered</option><option value="openRate">Open rate</option><option value="engagedRate">Engaged</option><option value="ctaRate">CTA rate</option><option value="conversionRate">Conversion</option><option value="unreadRate">Unread</option></select></label>
+      <label className="search-box"><Search size={15}/><input value={search} onChange={(event)=>setSearch(event.target.value)} placeholder="Search messages, senders, audiences" aria-label="Search delivered messages"/></label>
+      <label className="sort-control">Sort by<select value={sort} onChange={(event)=>setSort(event.target.value as SortKey)}><option value="newest">Newest delivered</option><option value="delivered">Delivery volume</option><option value="engagement">Engagement</option><option value="ctaConversion">CTA conversion</option></select></label>
     </div>
     {!rows.length ? <EmptyState/> : <div className="data-table-wrap"><table className="data-table">
-      <thead><tr><th>Message</th><th>Delivered</th><th>Exposure</th><th>Open</th><th>Engaged</th><th>CTA visible</th><th>CTA CTR</th><th>Conversion</th><th>Unread</th></tr></thead>
-      <tbody>{rows.map((record) => <tr key={record.id}>
-        <td><div className="message-cell"><span className={'message-icon ' + record.type.toLowerCase()}><MessageSquareText size={14}/></span><span><strong>{record.name}</strong><small>{record.type} · {record.platform} · {record.segment}</small></span></div></td>
-        <td>{formatCompact(record.delivered)}</td><td>{formatPercent(safeRate(record.exposed,record.delivered))}</td><td><strong>{formatPercent(record.openRate)}</strong></td><td>{formatPercent(record.engagedRate)}</td><td>{formatPercent(safeRate(record.ctaExposed,record.opened))}</td><td>{formatPercent(record.ctaRate)}</td><td><span className="conversion-cell">{formatPercent(record.conversionRate)}</span></td><td><span className={record.unreadRate>35?'risk-text':''}>{formatPercent(record.unreadRate)}</span></td>
-      </tr>)}</tbody>
+      <thead><tr><th>Delivered at</th><th>Message</th><th>Audience</th><th>Status</th><th>Delivered</th><th>Engagement</th><th>CTA conversion</th><th>CTA</th></tr></thead>
+      <tbody>{rows.map((record) => {
+        const href='/messages/'+record.id+(filtersQuery?'?'+filtersQuery:'');
+        return <tr key={record.id}>
+          <td><Link className="table-row-link delivered-time" href={href}>{formatSingaporeDateTime(record.deliveredAt)}<small>Singapore time</small></Link></td>
+          <td><Link className="table-row-link message-cell" href={href}><span className={'message-icon '+record.type.toLowerCase()}><MessageSquareText size={14}/></span><span><strong>{record.name}</strong><small>{record.sender} · {record.type}</small></span></Link></td>
+          <td><Link className="table-row-link" href={href}>{record.audience}</Link></td>
+          <td><Link className="table-row-link" href={href}><span className={'status-badge '+(record.status==='Delivered'?'good':'warning')}>{record.status}</span></Link></td>
+          <td><Link className="table-row-link" href={href}>{formatCompact(record.delivered)}</Link></td>
+          <td><Link className="table-row-link" href={href}><strong>{formatPercent(record.engagement)}</strong></Link></td>
+          <td><Link className="table-row-link" href={href}>{record.hasCTA?<span className="conversion-cell">{formatPercent(record.ctaConversion)}</span>:<span className="no-cta">No CTA</span>}</Link></td>
+          <td><Link className="table-row-link" href={href}>{record.hasCTA?<span className="cta-yes">Available</span>:<span className="no-cta">No CTA</span>}</Link></td>
+        </tr>;
+      })}</tbody>
     </table></div>}
-    <div className="definition-strip"><span><i className="legend-dot blue"/>CTA CTR uses CTA exposed—not opens—as its denominator.</span><span><i className="legend-dot green"/>Conversion means completed downstream action ÷ CTA clicks.</span></div>
+    <div className="definition-strip"><span><i className="legend-dot blue"/>Engagement uses unique opens ÷ delivered messages.</span><span><i className="legend-dot green"/>CTA-less messages are excluded from CTA conversion.</span></div>
   </Panel>;
+}
+
+function medianTimingLabel(record:MessageRecord) {
+  const timing=messageTimings[record.id]?.timeToFirstOpen.filter((bucket)=>bucket.label!=='Never') || [];
+  const target=record.opened/2;
+  let running=0;
+  return timing.find((bucket)=>(running+=bucket.value)>=target)?.label || '—';
+}
+
+function DistributionChart({ data, color='#4d80df' }: { data:{label:string;value:number}[]; color?:string }) {
+  return <div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{top:10,right:8,left:-10,bottom:0}}><CartesianGrid vertical={false} stroke="#eef1f5"/><XAxis dataKey="label" tickLine={false} axisLine={false} tick={{fontSize:9,fill:'#7f899b'}}/><YAxis tickLine={false} axisLine={false} tick={{fontSize:9,fill:'#9aa2b0'}} tickFormatter={formatCompact}/><Tooltip contentStyle={tooltipStyle} formatter={(value)=>formatCompact(Number(value))}/><Bar dataKey="value" fill={color} radius={[5,5,0,0]}/></BarChart></ResponsiveContainer></div>;
+}
+
+function MessageDetailPage({ record, query }: { record:MessageRecord; query:string }) {
+  const timing=messageTimings[record.id];
+  const backHref='/messages'+(query?'?'+query:'');
+  return <>
+    <Link className="back-link" href={backHref}><ArrowLeft size={14}/>Back to Delivered Messages</Link>
+    <section className="message-hero">
+      <div><div className="message-badges"><span className={'status-badge '+(record.status==='Delivered'?'good':'warning')}>{record.status}</span><span className="soft-badge">{record.type}</span><span className="soft-badge">{record.priority} priority</span></div><h2>{record.name}</h2><p>Sent by {record.sender} to {record.audience}</p></div>
+      <div className="delivery-stamp"><small>Delivered</small><strong>{formatSingaporeDateTime(record.deliveredAt)}</strong><span>Singapore time</span></div>
+    </section>
+    <section className="detail-kpis" aria-label="Message performance metrics">
+      <article><span>Delivered volume</span><strong>{formatCompact(record.delivered)}</strong><small>{record.platform} · {record.segment} users</small></article>
+      <article><span>Engagement Rate</span><strong>{formatPercent(safeRate(record.opened,record.delivered))}</strong><small>{formatCompact(record.opened)} unique opens</small></article>
+      <article><span>CTA Conversion</span><strong>{record.hasCTA?formatPercent(safeRate(record.clicked,record.opened)):'No CTA'}</strong><small>{record.hasCTA?formatCompact(record.clicked)+' clicks ÷ opens':'Excluded from CTA metrics'}</small></article>
+      <article><span>Median time to first open</span><strong>{medianTimingLabel(record)}</strong><small>Among messages that were opened</small></article>
+    </section>
+    <section className="detail-grid">
+      <Panel title="Time to first open" eyebrow="Delivered → message click" className="wide-detail-chart"><DistributionChart data={timing.timeToFirstOpen}/><p className="panel-note"><Clock3 size={14}/>Includes messages that were never opened so message decay remains visible.</p></Panel>
+      <Panel title="Message clicks by hour" eyebrow="24-hour activity · Singapore time" className="wide-detail-chart">
+        <div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><AreaChart data={timing.hourlyMessageClicks} margin={{top:8,right:8,left:-14,bottom:0}}><defs><linearGradient id={'hourly-'+record.id} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3976e8" stopOpacity={.26}/><stop offset="95%" stopColor="#3976e8" stopOpacity={0}/></linearGradient></defs><CartesianGrid vertical={false} stroke="#eef1f5"/><XAxis dataKey="hour" interval={2} tickLine={false} axisLine={false} tick={{fontSize:8,fill:'#8791a2'}}/><YAxis tickLine={false} axisLine={false} tick={{fontSize:9,fill:'#9aa2b0'}} tickFormatter={formatCompact}/><Tooltip contentStyle={tooltipStyle} formatter={(value)=>[formatCompact(Number(value)),'Message clicks']}/><Area type="monotone" dataKey="clicks" stroke="#3976e8" strokeWidth={2} fill={'url(#hourly-'+record.id+')'}/></AreaChart></ResponsiveContainer></div>
+      </Panel>
+      <Panel title="Delivered to click" eyebrow="Duration distribution"><DistributionChart data={timing.deliveredToClick} color="#6b8fe0"/><p className="panel-note"><MousePointerClick size={14}/>{formatCompact(record.opened)} people opened this message.</p></Panel>
+      <Panel title="Click to conversion" eyebrow="Post-click duration">
+        {record.hasCTA?<DistributionChart data={timing.clickToConvert} color="#7569d8"/>:<div className="chart-empty"><MousePointerClick size={20}/><strong>No CTA</strong><span>This message has no click-to-conversion journey.</span></div>}
+        {record.hasCTA&&<p className="panel-note"><Target size={14}/>{formatCompact(record.completed)} completed actions from {formatCompact(record.clicked)} CTA clicks.</p>}
+      </Panel>
+    </section>
+  </>;
 }
 
 function BehaviourPage({ records }: { records:MessageRecord[] }) {
@@ -316,7 +323,7 @@ function HealthPage({ records }: { records:MessageRecord[] }) {
   </>;
 }
 
-export default function DashboardApp({ section }: { section:DashboardSection }) {
+export default function DashboardApp({ section, messageId }: { section:DashboardSection; messageId?:string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -326,26 +333,33 @@ export default function DashboardApp({ section }: { section:DashboardSection }) 
   const query = filtersToQuery(filters);
   const filteredRecords = useMemo(()=>filterMessages(messages,filters),[filters]);
   const copy = sectionCopy[section];
+  const selectedMessage = messageId ? getMessageById(messages,messageId) : undefined;
   const updateFilter = (key:keyof DashboardFilters,value:string) => {
     const next = {...filters,[key]:value} as DashboardFilters;
     const nextQuery = filtersToQuery(next);
     startTransition(()=>router.replace(pathname+(nextQuery?'?'+nextQuery:''),{scroll:false}));
   };
   const sectionContent = {
-    overview:<Overview records={filteredRecords}/>, messages:<MessagesPage records={filteredRecords}/>,
+    overview:<Overview records={filteredRecords} query={query}/>, messages:<MessagesPage records={filteredRecords} filtersQuery={query}/>,
+    'message-detail':selectedMessage?<MessageDetailPage record={selectedMessage} query={query}/>:<EmptyState/>,
     behaviour:<BehaviourPage records={filteredRecords}/>, journey:<JourneyPage records={filteredRecords}/>,
     segments:<SegmentsPage/>, health:<HealthPage records={filteredRecords}/>,
   }[section];
+  const renderNavItems = (items:typeof primaryNavItems) => items.map((item)=>{
+    const Icon=item.icon;
+    const active=item.href==='/'?pathname===item.href:pathname===item.href||pathname.startsWith(item.href+'/');
+    return <Link href={item.href+(query?'?'+query:'')} className={'nav-link '+(active?'active':'')} key={item.href} onClick={()=>setMenuOpen(false)}><Icon size={17}/>{item.label}</Link>;
+  });
   return <main className="app-frame">
     <aside className={'sidebar '+(menuOpen?'open':'')}>
       <div className="sidebar-head"><Link href={'/'+(query?'?'+query:'')} className="brand"><span className="brand-mark">d</span><span>deepdots</span></Link><button className="mobile-close" onClick={()=>setMenuOpen(false)} aria-label="Close menu"><X size={18}/></button></div>
-      <nav aria-label="Primary navigation">{navItems.map((item)=>{const Icon=item.icon;const active=pathname===item.href;return <Link href={item.href+(query?'?'+query:'')} className={'nav-link '+(active?'active':'')} key={item.href} onClick={()=>setMenuOpen(false)}><Icon size={17}/>{item.label}</Link>})}</nav>
+      <nav aria-label="Primary navigation"><p className="nav-section-label">Workspace</p>{renderNavItems(primaryNavItems)}<p className="nav-section-label analytics-label">Analytics</p>{renderNavItems(analyticsNavItems)}</nav>
       <div className="sidebar-meta"><div><span className="live-dot"/>Demo workspace</div><small>Synthetic product data</small></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="Close menu" onClick={()=>setMenuOpen(false)}/>}
     <section className="content-shell">
-      <header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={()=>setMenuOpen(true)} aria-label="Open menu"><Menu size={19}/></button><div><p className="eyebrow">{copy[0]}</p><h1>{copy[1]}</h1></div></div><div className="header-actions"><button className="icon-button" aria-label="Notifications"><Bell size={16}/><span/></button><div className="avatar">YO</div></div></header>
-      <div className="page-content"><div className="page-intro"><p>{copy[2]}</p><span className="demo-pill"><span/>Demo data</span></div><Filters filters={filters} onChange={updateFilter} isPending={isPending}/>{sectionContent}</div>
+      <header className="topbar"><div className="topbar-title"><button className="menu-button" onClick={()=>setMenuOpen(true)} aria-label="Open menu"><Menu size={19}/></button><div><p className="eyebrow">{copy[0]}</p><h1>{section==='message-detail'&&selectedMessage?selectedMessage.name:copy[1]}</h1></div></div><div className="header-actions"><button className="icon-button" aria-label="Notifications"><Bell size={16}/><span/></button><div className="avatar">YO</div></div></header>
+      <div className="page-content"><div className="page-intro"><p>{copy[2]}</p><span className="demo-pill"><span/>Demo data</span></div>{section!=='message-detail'&&<Filters filters={filters} onChange={updateFilter} isPending={isPending}/>} {sectionContent}</div>
     </section>
   </main>;
 }

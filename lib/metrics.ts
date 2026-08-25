@@ -61,8 +61,18 @@ export function aggregateMetrics(records: MessageRecord[], period: Period) {
   const clicked = sum('clicked');
   const completed = sum('completed');
   const unread = sum('unread');
+  const ctaEligible = records.filter((record) => record.hasCTA);
+  const ctaEligibleOpened = Math.round(
+    ctaEligible.reduce((total, record) => total + record.opened, 0) * factor
+  );
+  const ctaEligibleClicked = Math.round(
+    ctaEligible.reduce((total, record) => total + record.clicked, 0) * factor
+  );
   return {
     delivered, exposed, opened, engaged, ctaExposed, clicked, completed, unread,
+    ctaEligibleOpened, ctaEligibleClicked,
+    engagementRate: safeRate(opened, delivered),
+    ctaConversionFromOpens: safeRate(ctaEligibleClicked, ctaEligibleOpened),
     exposureRate: safeRate(exposed, delivered),
     openRate: safeRate(opened, exposed),
     engagedRate: safeRate(engaged, opened),
@@ -72,6 +82,31 @@ export function aggregateMetrics(records: MessageRecord[], period: Period) {
     endToEndRate: safeRate(completed, delivered),
     unreadRate: safeRate(unread, delivered),
   };
+}
+
+export function topMessagesByEngagement(records: MessageRecord[], limit = 5) {
+  return [...records]
+    .sort((left, right) => {
+      const rateDifference = safeRate(right.opened, right.delivered) - safeRate(left.opened, left.delivered);
+      return rateDifference || right.delivered - left.delivered || left.name.localeCompare(right.name);
+    })
+    .slice(0, limit);
+}
+
+export function getMessageById(records: MessageRecord[], id: string) {
+  return records.find((record) => record.id === id);
+}
+
+export function formatSingaporeDateTime(value: string) {
+  return new Intl.DateTimeFormat('en-SG', {
+    timeZone: 'Asia/Singapore',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(value));
 }
 
 export function formatCompact(value: number) {

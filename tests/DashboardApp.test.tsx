@@ -49,16 +49,39 @@ describe('dashboard interactions', () => {
   it('preserves global query filters in navigation links', () => {
     navigation.params = 'segment=active&platform=iOS';
     render(<DashboardApp section="overview"/>);
-    expect(screen.getByRole('link', { name:'Messages' })).toHaveAttribute('href', '/messages?segment=active&platform=iOS');
+    expect(screen.getByRole('link', { name:'Delivered Messages' })).toHaveAttribute('href', '/messages?segment=active&platform=iOS');
   });
 
   it('searches the message performance table', async () => {
     navigation.pathname = '/messages';
     const user = userEvent.setup();
     render(<DashboardApp section="messages"/>);
-    await user.type(screen.getByLabelText('Search campaigns'), 'renewal');
+    await user.type(screen.getByLabelText('Search delivered messages'), 'renewal');
     expect(screen.getByText('Work pass renewal reminder')).toBeInTheDocument();
     expect(screen.queryByText('SkillsFuture credit update')).not.toBeInTheDocument();
+  });
+
+  it('preserves the global query on delivery-history detail links', () => {
+    navigation.pathname='/messages';
+    navigation.params='segment=active&platform=iOS';
+    render(<DashboardApp section="messages"/>);
+    const links=screen.getAllByRole('link',{name:/Work pass renewal reminder/});
+    expect(links[0]).toHaveAttribute('href','/messages/renewal?segment=active&platform=iOS');
+  });
+
+  it('renders individual message diagnostics', () => {
+    navigation.pathname='/messages/renewal';
+    render(<DashboardApp section="message-detail" messageId="renewal"/>);
+    expect(screen.getByRole('heading',{name:'Work pass renewal reminder',level:1})).toBeInTheDocument();
+    expect(screen.getByRole('heading',{name:'Message clicks by hour'})).toBeInTheDocument();
+    expect(screen.getByText('Median time to first open')).toBeInTheDocument();
+  });
+
+  it('shows a No CTA state on CTA-less message details', () => {
+    navigation.pathname='/messages/wage';
+    render(<DashboardApp section="message-detail" messageId="wage"/>);
+    expect(screen.getAllByText('No CTA').length).toBeGreaterThan(0);
+    expect(screen.getByText('This message has no click-to-conversion journey.')).toBeInTheDocument();
   });
 
   it.each([
