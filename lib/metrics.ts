@@ -1,11 +1,16 @@
 import {
   DashboardFilters,
   MessageRecord,
+  MessageTimingProfile,
   MessageType,
   Period,
   Platform,
+  SendTimeOpenRate,
   Segment,
+  TimingBucket,
   defaultFilters,
+  messageTimings,
+  sendTimeDays,
 } from './data';
 
 const periods: Period[] = ['7', '30', '90'];
@@ -91,6 +96,100 @@ export function aggregateMetrics(records: MessageRecord[], period: Period) {
     endToEndRate: safeRate(completed, delivered),
     unreadRate: safeRate(unread, delivered),
   };
+}
+
+export type TimingMetric = 'timeToFirstOpen' | 'openToActionClick';
+
+export function aggregateTimingBuckets(
+  records: MessageRecord[],
+  metric: TimingMetric,
+  period: Period = '30',
+  profiles: Record<string, MessageTimingProfile> = messageTimings,
+): TimingBucket[] {
+  const template = Object.values(profiles)[0]?.[metric] || [];
+  const totals = new Map(template.map((bucket) => [bucket.label, 0]));
+
+  for (const record of records) {
+    const profile = profiles[record.id];
+    if (!profile) continue;
+    for (const bucket of profile[metric]) {
+      totals.set(bucket.label, (totals.get(bucket.label) || 0) + bucket.value);
+    }
+  }
+
+  const factor = periodFactors[period];
+  return [...totals].map(([label, value]) => ({ label, value: Math.round(value * factor) }));
+}
+
+export function timingBucketTotal(buckets: TimingBucket[]) {
+  return buckets.reduce((total, bucket) => total + bucket.value, 0);
+}
+
+export function medianTimingBucket(buckets: TimingBucket[], excludedLabel: string) {
+  const successfulBuckets = buckets.filter((bucket) => bucket.label !== excludedLabel);
+  const successfulTotal = timingBucketTotal(successfulBuckets);
+  if (!successfulTotal) return '—';
+
+  const target = successfulTotal / 2;
+  let running = 0;
+  return successfulBuckets.find((bucket) => (running += bucket.value) >= target)?.label || '—';
+}
+
+export function isTimingBaseSufficient(base: number, minimum = 50) {
+  return base >= minimum;
+}
+
+export function aggregateSendTimeOpenRates(
+  records: MessageRecord[],
+  profiles: Record<string, MessageTimingProfile> = messageTimings,
+): SendTimeOpenRate[] {
+  const cells = new Map<
+    string,
+    { weightedRate: number; sampleSize: number; day: string; hour: string }
+  >();
+
+  for (const record of records) {
+    const profile = profiles[record.id];
+    if (!profile) continue;
+    for (const cell of profile.sendTimeOpenRates) {
+      const key = `${cell.day}-${cell.hour}`;
+      const current = cells.get(key) || {
+        weightedRate: 0,
+        sampleSize: 0,
+        day: cell.day,
+        hour: cell.hour,
+      };
+      current.weightedRate += cell.openRate * cell.sampleSize;
+      current.sampleSize += cell.sampleSize;
+      cells.set(key, current);
+    }
+  }
+
+  if (!cells.size) return [];
+  const firstProfile = records.map((record) => profiles[record.id]).find(Boolean);
+  const hourOrder =
+    firstProfile?.sendTimeOpenRates
+      .filter((cell) => cell.day === sendTimeDays[0])
+      .map((cell) => cell.hour) || [];
+
+  return sendTimeDays.flatMap((day) =>
+    hourOrder.map((hour) => {
+      const cell = cells.get(`${day}-${hour}`)!;
+      return {
+        day,
+        hour,
+        openRate: Number((cell.weightedRate / cell.sampleSize).toFixed(1)),
+        sampleSize: cell.sampleSize,
+      };
+    }),
+  );
+}
+
+export function bestSendTime(cells: SendTimeOpenRate[]) {
+  return cells.reduce<SendTimeOpenRate | undefined>(
+    (best, cell) => (!best || cell.openRate > best.openRate ? cell : best),
+    undefined,
+  );
 }
 
 export function topMessagesByEngagement(records: MessageRecord[], limit = 5) {

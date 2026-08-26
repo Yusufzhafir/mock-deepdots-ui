@@ -46,6 +46,9 @@ import {
 import {
   DashboardFilters,
   MessageRecord,
+  Period,
+  SendTimeOpenRate,
+  TimingBucket,
   filterOptions,
   frictionSignals,
   messages,
@@ -53,20 +56,27 @@ import {
   positionPerformance,
   scrollDepth,
   segmentRows,
+  sendTimeDays,
   timeToOpen,
   trendPoints,
 } from '../lib/data';
 import {
   aggregateMetrics,
+  aggregateSendTimeOpenRates,
+  aggregateTimingBuckets,
+  bestSendTime,
   filterMessages,
   filtersToQuery,
   formatCompact,
   formatPercent,
   formatSingaporeDateTime,
   getMessageById,
+  isTimingBaseSufficient,
+  medianTimingBucket,
   parseFilters,
   safeRate,
   topMessagesByEngagement,
+  timingBucketTotal,
   weightedAverage,
 } from '../lib/metrics';
 
@@ -225,14 +235,17 @@ function StatCard({
   delta,
   icon: Icon,
   note,
+  favourable,
 }: {
   label: string;
   value: string;
   delta: number;
   icon: typeof Eye;
   note?: string;
+  favourable?: boolean;
 }) {
   const positive = delta >= 0;
+  const improved = favourable ?? positive;
   return (
     <article className="kpi-card">
       <div className="kpi-label">
@@ -243,7 +256,7 @@ function StatCard({
       </div>
       <strong>{value}</strong>
       <p>
-        <span className={positive ? 'delta up' : 'delta down'}>
+        <span className={improved ? 'delta up' : 'delta down'}>
           {positive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
           {Math.abs(delta).toFixed(1)}%
         </span>
@@ -253,10 +266,130 @@ function StatCard({
   );
 }
 
-function Overview({ records, query }: { records: MessageRecord[]; query: string }) {
-  const metrics = aggregateMetrics(records, '30');
+function TimingBarList({
+  data,
+  base,
+  tone,
+}: {
+  data: TimingBucket[];
+  base: number;
+  tone: 'open' | 'action';
+}) {
+  const peak = Math.max(...data.map((bucket) => bucket.value), 1);
+  return (
+    <div className={'timing-bars ' + tone}>
+      {data.map((bucket) => {
+        const share = safeRate(bucket.value, base);
+        return (
+          <div className="timing-bar-row" key={bucket.label}>
+            <span>{bucket.label}</span>
+            <div className="timing-bar-track" aria-hidden="true">
+              <i style={{ width: `${(bucket.value / peak) * 100}%` }} />
+            </div>
+            <strong>{formatPercent(share)}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TimingEmptyState({ type }: { type: 'no-action' | 'thin-base' }) {
+  const noAction = type === 'no-action';
+  return (
+    <div className="timing-empty">
+      <MousePointerClick size={20} />
+      <strong>{noAction ? 'No action button' : 'Not enough data'}</strong>
+      <span>
+        {noAction
+          ? 'The selected messages do not have an eligible action-click journey.'
+          : 'At least 50 opened recipients are required to show this distribution.'}
+      </span>
+    </div>
+  );
+}
+
+function SendTimeHeatmap({ cells }: { cells: SendTimeOpenRate[] }) {
+  const best = bestSendTime(cells);
+  const maximum = Math.max(...cells.map((cell) => cell.openRate), 1);
+  const hours = cells.filter((cell) => cell.day === sendTimeDays[0]).map((cell) => cell.hour);
+  const readableHour = (hour: string) => {
+    if (/^(1[0-2]|[1-9])(am|pm)$/.test(hour)) return hour;
+    const numericHour = Number(hour.replace(':00', ''));
+    if (numericHour === 0) return '12am';
+    if (numericHour === 12) return '12pm';
+    return numericHour > 12 ? `${numericHour - 12}pm` : `${numericHour}am`;
+  };
+  return (
+    <div className="heatmap-wrap">
+      <div
+        className="heatmap-grid"
+        style={{ gridTemplateColumns: `42px repeat(${hours.length}, 1fr)` }}
+      >
+        <span />
+        {hours.map((hour, index) => (
+          <span className="heatmap-hour" key={hour}>
+            {index % 3 === 0 ? readableHour(hour) : ''}
+          </span>
+        ))}
+        {sendTimeDays.map((day) => (
+          <div className="heatmap-row" key={day}>
+            <strong>{day}</strong>
+            {hours.map((hour) => {
+              const cell = cells.find(
+                (candidate) => candidate.day === day && candidate.hour === hour,
+              )!;
+              const isBest = best?.day === day && best.hour === hour;
+              const label = `${day} ${readableHour(hour)}: ${formatPercent(cell.openRate)} open rate`;
+              return (
+                <span
+                  className={'heatmap-cell ' + (isBest ? 'best' : '')}
+                  key={hour}
+                  role="img"
+                  aria-label={label}
+                  title={label}
+                  style={{
+                    backgroundColor: `rgba(57, 118, 232, ${0.1 + (cell.openRate / maximum) * 0.8})`,
+                  }}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      {best && (
+        <p className="heatmap-best">
+          <Sparkles size={14} />
+          Best window:{' '}
+          <strong>
+            {best.day} at {readableHour(best.hour)}
+          </strong>{' '}
+          · {formatPercent(best.openRate)} weighted open rate
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Overview({
+  records,
+  query,
+  period,
+}: {
+  records: MessageRecord[];
+  query: string;
+  period: Period;
+}) {
+  const metrics = aggregateMetrics(records, period);
   if (!records.length) return <EmptyState />;
   const best = topMessagesByEngagement(records);
+  const openBuckets = aggregateTimingBuckets(records, 'timeToFirstOpen', period);
+  const actionBuckets = aggregateTimingBuckets(records, 'openToActionClick', period);
+  const deliveredBase = timingBucketTotal(openBuckets);
+  const actionBase = timingBucketTotal(actionBuckets);
+  const hasActionButton = records.some((record) => record.hasCTA);
+  const actionTimingAvailable = isTimingBaseSufficient(actionBase);
+  const heatmapCells = aggregateSendTimeOpenRates(records);
   return (
     <>
       <section className="kpi-grid overview-kpis" aria-label="Inbox overview metrics">
@@ -275,13 +408,59 @@ function Overview({ records, query }: { records: MessageRecord[]; query: string 
           note="unique opens ÷ delivered"
         />
         <StatCard
-          label="CTA Conversion"
-          value={formatPercent(metrics.ctaConversionFromOpens)}
-          delta={3.4}
+          label="Median time to open"
+          value={medianTimingBucket(openBuckets, 'Never')}
+          delta={-8.6}
+          favourable
+          icon={Clock3}
+          note="among recipients who opened"
+        />
+        <StatCard
+          label="Median open to action click"
+          value={
+            !hasActionButton
+              ? 'No action button'
+              : actionTimingAvailable
+                ? medianTimingBucket(actionBuckets, 'Never clicked')
+                : 'Not enough data'
+          }
+          delta={-5.1}
+          favourable
           icon={MousePointerClick}
-          note="clicks ÷ opens on CTA messages"
+          note="among recipients who action-clicked"
         />
       </section>
+      <section className="timing-grid" aria-label="Message timing distributions">
+        <Panel title="Time to first open" eyebrow="Delivered → first open · blue">
+          <TimingBarList data={openBuckets} base={deliveredBase} tone="open" />
+          <p className="panel-note">
+            <Clock3 size={14} />
+            Percent of delivered recipients; “Never” keeps unopened recipients visible.
+          </p>
+        </Panel>
+        <Panel title="Time from open to action click" eyebrow="Open → action click · orange">
+          {!hasActionButton ? (
+            <TimingEmptyState type="no-action" />
+          ) : !actionTimingAvailable ? (
+            <TimingEmptyState type="thin-base" />
+          ) : (
+            <>
+              <TimingBarList data={actionBuckets} base={actionBase} tone="action" />
+              <p className="panel-note action-note">
+                <MousePointerClick size={14} />
+                Percent of opened recipients on CTA-bearing messages; timing starts at first open.
+              </p>
+            </>
+          )}
+        </Panel>
+      </section>
+      <Panel
+        title="Best time to send"
+        eyebrow="Day × hour weighted open rate · Singapore time"
+        className="heatmap-panel"
+      >
+        <SendTimeHeatmap cells={heatmapCells} />
+      </Panel>
       <Panel
         title="Top 5 Message Performance"
         eyebrow="Ranked by engagement rate"
@@ -320,7 +499,7 @@ function Overview({ records, query }: { records: MessageRecord[]; query: string 
                 <span className={record.hasCTA ? 'conversion-cell' : 'no-cta'}>
                   {record.hasCTA
                     ? formatPercent(safeRate(record.clicked, record.opened))
-                    : 'No CTA'}
+                    : 'No action button'}
                 </span>
               </Link>
             );
@@ -467,7 +646,7 @@ function MessagesPage({
                             {formatPercent(record.ctaConversion)}
                           </span>
                         ) : (
-                          <span className="no-cta">No CTA</span>
+                          <span className="no-cta">No action button</span>
                         )}
                       </Link>
                     </td>
@@ -476,7 +655,7 @@ function MessagesPage({
                         {record.hasCTA ? (
                           <span className="cta-yes">Available</span>
                         ) : (
-                          <span className="no-cta">No CTA</span>
+                          <span className="no-cta">No action button</span>
                         )}
                       </Link>
                     </td>
@@ -499,14 +678,6 @@ function MessagesPage({
       </div>
     </Panel>
   );
-}
-
-function medianTimingLabel(record: MessageRecord) {
-  const timing =
-    messageTimings[record.id]?.timeToFirstOpen.filter((bucket) => bucket.label !== 'Never') || [];
-  const target = record.opened / 2;
-  let running = 0;
-  return timing.find((bucket) => (running += bucket.value) >= target)?.label || '—';
 }
 
 function DistributionChart({
@@ -591,7 +762,9 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
         <article>
           <span>CTA Conversion</span>
           <strong>
-            {record.hasCTA ? formatPercent(safeRate(record.clicked, record.opened)) : 'No CTA'}
+            {record.hasCTA
+              ? formatPercent(safeRate(record.clicked, record.opened))
+              : 'No action button'}
           </strong>
           <small>
             {record.hasCTA
@@ -601,31 +774,31 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
         </article>
         <article>
           <span>Median time to first open</span>
-          <strong>{medianTimingLabel(record)}</strong>
+          <strong>{medianTimingBucket(timing.timeToFirstOpen, 'Never')}</strong>
           <small>Among messages that were opened</small>
         </article>
       </section>
       <section className="detail-grid">
         <Panel
           title="Time to first open"
-          eyebrow="Delivered → message click"
+          eyebrow="Delivered → first open"
           className="wide-detail-chart"
         >
-          <DistributionChart data={timing.timeToFirstOpen} />
+          <TimingBarList data={timing.timeToFirstOpen} base={record.delivered} tone="open" />
           <p className="panel-note">
             <Clock3 size={14} />
-            Includes messages that were never opened so message decay remains visible.
+            Percent of delivered recipients; “Never” keeps unopened recipients visible.
           </p>
         </Panel>
         <Panel
-          title="Message clicks by hour"
+          title="Message opens by hour"
           eyebrow="24-hour activity · Singapore time"
           className="wide-detail-chart"
         >
           <div className="chart-medium">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
-                data={timing.hourlyMessageClicks}
+                data={timing.hourlyOpens}
                 margin={{ top: 8, right: 8, left: -14, bottom: 0 }}
               >
                 <defs>
@@ -650,11 +823,11 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
                 />
                 <Tooltip
                   contentStyle={tooltipStyle}
-                  formatter={(value) => [formatCompact(Number(value)), 'Message clicks']}
+                  formatter={(value) => [formatCompact(Number(value)), 'Message opens']}
                 />
                 <Area
                   type="monotone"
-                  dataKey="clicks"
+                  dataKey="opens"
                   stroke="#3976e8"
                   strokeWidth={2}
                   fill={'url(#hourly-' + record.id + ')'}
@@ -663,12 +836,20 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
             </ResponsiveContainer>
           </div>
         </Panel>
-        <Panel title="Delivered to click" eyebrow="Duration distribution">
-          <DistributionChart data={timing.deliveredToClick} color="#6b8fe0" />
-          <p className="panel-note">
-            <MousePointerClick size={14} />
-            {formatCompact(record.opened)} people opened this message.
-          </p>
+        <Panel title="Time from open to action click" eyebrow="Open → action click">
+          {!record.hasCTA ? (
+            <TimingEmptyState type="no-action" />
+          ) : !isTimingBaseSufficient(record.opened) ? (
+            <TimingEmptyState type="thin-base" />
+          ) : (
+            <>
+              <TimingBarList data={timing.openToActionClick} base={record.opened} tone="action" />
+              <p className="panel-note action-note">
+                <MousePointerClick size={14} />
+                Percent of opened recipients; “Never clicked” is eligible opens minus action clicks.
+              </p>
+            </>
+          )}
         </Panel>
         <Panel title="Click to conversion" eyebrow="Post-click duration">
           {record.hasCTA ? (
@@ -676,7 +857,7 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
           ) : (
             <div className="chart-empty">
               <MousePointerClick size={20} />
-              <strong>No CTA</strong>
+              <strong>No action button</strong>
               <span>This message has no click-to-conversion journey.</span>
             </div>
           )}
@@ -1196,7 +1377,7 @@ export default function DashboardApp({
     );
   };
   const sectionContent = {
-    overview: <Overview records={filteredRecords} query={query} />,
+    overview: <Overview records={filteredRecords} query={query} period={filters.period} />,
     messages: <MessagesPage records={filteredRecords} filtersQuery={query} />,
     'message-detail': selectedMessage ? (
       <MessageDetailPage record={selectedMessage} query={query} />
