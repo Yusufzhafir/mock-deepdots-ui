@@ -40,10 +40,11 @@ export function filtersToQuery(filters: DashboardFilters) {
 }
 
 export function filterMessages(records: MessageRecord[], filters: DashboardFilters) {
-  return records.filter((record) =>
-    (filters.segment === 'all' || record.segment === filters.segment) &&
-    (filters.messageType === 'all' || record.type === filters.messageType) &&
-    (filters.platform === 'all' || record.platform === filters.platform)
+  return records.filter(
+    (record) =>
+      (filters.segment === 'all' || record.segment === filters.segment) &&
+      (filters.messageType === 'all' || record.type === filters.messageType) &&
+      (filters.platform === 'all' || record.platform === filters.platform),
   );
 }
 
@@ -63,14 +64,22 @@ export function aggregateMetrics(records: MessageRecord[], period: Period) {
   const unread = sum('unread');
   const ctaEligible = records.filter((record) => record.hasCTA);
   const ctaEligibleOpened = Math.round(
-    ctaEligible.reduce((total, record) => total + record.opened, 0) * factor
+    ctaEligible.reduce((total, record) => total + record.opened, 0) * factor,
   );
   const ctaEligibleClicked = Math.round(
-    ctaEligible.reduce((total, record) => total + record.clicked, 0) * factor
+    ctaEligible.reduce((total, record) => total + record.clicked, 0) * factor,
   );
   return {
-    delivered, exposed, opened, engaged, ctaExposed, clicked, completed, unread,
-    ctaEligibleOpened, ctaEligibleClicked,
+    delivered,
+    exposed,
+    opened,
+    engaged,
+    ctaExposed,
+    clicked,
+    completed,
+    unread,
+    ctaEligibleOpened,
+    ctaEligibleClicked,
     engagementRate: safeRate(opened, delivered),
     ctaConversionFromOpens: safeRate(ctaEligibleClicked, ctaEligibleOpened),
     exposureRate: safeRate(exposed, delivered),
@@ -87,8 +96,11 @@ export function aggregateMetrics(records: MessageRecord[], period: Period) {
 export function topMessagesByEngagement(records: MessageRecord[], limit = 5) {
   return [...records]
     .sort((left, right) => {
-      const rateDifference = safeRate(right.opened, right.delivered) - safeRate(left.opened, left.delivered);
-      return rateDifference || right.delivered - left.delivered || left.name.localeCompare(right.name);
+      const rateDifference =
+        safeRate(right.opened, right.delivered) - safeRate(left.opened, left.delivered);
+      return (
+        rateDifference || right.delivered - left.delivered || left.name.localeCompare(right.name)
+      );
     })
     .slice(0, limit);
 }
@@ -110,14 +122,19 @@ export function formatSingaporeDateTime(value: string) {
 }
 
 export function formatCompact(value: number) {
-  return new Intl.NumberFormat('en', { notation:'compact', maximumFractionDigits:1 }).format(value);
+  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(
+    value,
+  );
 }
 
 export function formatPercent(value: number, digits = 1) {
   return `${value.toFixed(digits)}%`;
 }
 
-export function weightedAverage(records: MessageRecord[], key: 'medianReadSeconds' | 'frictionRate' | 'latencyP95') {
+export function weightedAverage(
+  records: MessageRecord[],
+  key: 'medianReadSeconds' | 'frictionRate' | 'latencyP95',
+) {
   if (!records.length) return 0;
   const totalWeight = records.reduce((total, record) => total + record.opened, 0);
   if (!totalWeight) return 0;
