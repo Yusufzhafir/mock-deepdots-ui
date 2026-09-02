@@ -41,17 +41,27 @@ export interface TimingBucket {
   value: number;
 }
 
-export interface HourlyMessageClicks {
+export interface HourlyOpen {
   hour: string;
-  clicks: number;
+  opens: number;
+}
+
+export interface SendTimeOpenRate {
+  day: string;
+  hour: string;
+  openRate: number;
+  sampleSize: number;
 }
 
 export interface MessageTimingProfile {
-  hourlyMessageClicks: HourlyMessageClicks[];
+  hourlyOpens: HourlyOpen[];
   timeToFirstOpen: TimingBucket[];
-  deliveredToClick: TimingBucket[];
+  openToActionClick: TimingBucket[];
   clickToConvert: TimingBucket[];
+  sendTimeOpenRates: SendTimeOpenRate[];
 }
+
+export const sendTimeDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
 export const defaultFilters: DashboardFilters = {
   period: '30',
@@ -417,26 +427,57 @@ function buildTimingProfile(message: MessageRecord, seed: number): MessageTiming
   const hourly = distribute(message.opened, hourLabels, shiftedShape);
   const openedTiming = distribute(
     message.opened,
-    ['<1h', '1–6h', '6–24h', '1–3d', '3–7d', '>7d'],
-    [31 + seed, 22, 20, 12, 6, 2],
+    ['<1h', '1–6h', '6–24h', '1–7d', '1–4w', '1–6mo', '>6mo'],
+    [31 + seed, 22, 20, 14, 7, 3, 1],
   );
   const firstOpen = [
     ...openedTiming,
     { label: 'Never', value: Math.max(0, message.delivered - message.opened) },
   ];
+  const actionClickTiming = message.hasCTA
+    ? [
+        ...distribute(
+          message.clicked,
+          ['<10s', '10–30s', '30–60s', '1–5m', '5–15m', '15–60m', '>1h'],
+          [10, 19 + seed, 24, 25, 12, 7, 3],
+        ),
+        { label: 'Never clicked', value: Math.max(0, message.opened - message.clicked) },
+      ]
+    : ['<10s', '10–30s', '30–60s', '1–5m', '5–15m', '15–60m', '>1h', 'Never clicked'].map(
+        (label) => ({ label, value: 0 }),
+      );
   const converted = distribute(
     message.completed,
     ['<1m', '1–5m', '5–15m', '15–30m', '30–60m', '>1h'],
     [9, 24 + seed, 31, 18, 10, 8],
   );
+  const baseOpenRate = (message.opened / message.delivered) * 100;
+  const dayWeights = [0.84, 1.08, 1.14, 1.06, 0.96, 0.72, 0.66];
+  const maxHourlyWeight = Math.max(...hourlyShape);
+  const sendTimeOpenRates = sendTimeDays.flatMap((day, dayIndex) =>
+    hourLabels.map((hour, hourIndex) => {
+      const hourScore = hourlyShape[(hourIndex + seed) % hourlyShape.length] / maxHourlyWeight;
+      const openRate = Math.min(
+        92,
+        Math.max(4, baseOpenRate * dayWeights[dayIndex] * (0.48 + hourScore * 0.72)),
+      );
+      return {
+        day,
+        hour,
+        openRate: Number(openRate.toFixed(1)),
+        sampleSize: Math.max(50, Math.round(message.delivered / 168)),
+      };
+    }),
+  );
   return {
-    hourlyMessageClicks: hourly.map((bucket) => ({ hour: bucket.label, clicks: bucket.value })),
+    hourlyOpens: hourly.map((bucket) => ({ hour: bucket.label, opens: bucket.value })),
     timeToFirstOpen: firstOpen,
-    deliveredToClick: openedTiming,
+    openToActionClick: actionClickTiming,
     clickToConvert: [
       ...converted,
       { label: 'Not converted', value: Math.max(0, message.clicked - message.completed) },
     ],
+    sendTimeOpenRates,
   };
 }
 
@@ -462,10 +503,11 @@ export const timeToOpen = [
   { label: '< 1 hour', value: 31 },
   { label: '1–6 hours', value: 22 },
   { label: '6–24 hours', value: 20 },
-  { label: '1–3 days', value: 12 },
-  { label: '3–7 days', value: 6 },
-  { label: '> 7 days', value: 2 },
-  { label: 'Never', value: 7 },
+  { label: '1–7 days', value: 14 },
+  { label: '1–4 weeks', value: 7 },
+  { label: '1–6 months', value: 3 },
+  { label: '> 6 months', value: 1 },
+  { label: 'Never', value: 2 },
 ];
 
 export const scrollDepth = [
