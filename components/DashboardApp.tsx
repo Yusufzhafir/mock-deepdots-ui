@@ -3,29 +3,25 @@
 import { useMemo, useState, useTransition } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Activity,
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
   BarChart3,
   Bell,
   ChevronDown,
-  CircleGauge,
   Clock3,
   Eye,
   Filter,
-  HeartPulse,
   Inbox,
+  Info,
   LayoutDashboard,
   Menu,
   MessageSquareText,
   MousePointerClick,
   Route,
   Search,
-  ShieldCheck,
   Sparkles,
   Target,
-  UsersRound,
   X,
 } from 'lucide-react';
 import {
@@ -35,9 +31,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -50,15 +43,11 @@ import {
   SendTimeOpenRate,
   TimingBucket,
   filterOptions,
-  frictionSignals,
   messages,
   messageTimings,
-  positionPerformance,
   scrollDepth,
-  segmentRows,
   sendTimeDays,
   timeToOpen,
-  trendPoints,
 } from '../lib/data';
 import {
   aggregateMetrics,
@@ -80,14 +69,7 @@ import {
   weightedAverage,
 } from '../lib/metrics';
 
-export type DashboardSection =
-  | 'overview'
-  | 'messages'
-  | 'message-detail'
-  | 'behaviour'
-  | 'journey'
-  | 'segments'
-  | 'health';
+export type DashboardSection = 'overview' | 'messages' | 'message-detail' | 'behaviour' | 'journey';
 
 const primaryNavItems = [
   { href: '/', label: 'Overview', icon: LayoutDashboard },
@@ -97,8 +79,6 @@ const primaryNavItems = [
 const analyticsNavItems = [
   { href: '/behaviour', label: 'Behaviour', icon: BarChart3 },
   { href: '/journey', label: 'Action journey', icon: Route },
-  { href: '/segments', label: 'Segments', icon: UsersRound },
-  { href: '/health', label: 'Health', icon: HeartPulse },
 ];
 
 const sectionCopy = {
@@ -123,19 +103,9 @@ const sectionCopy = {
     'See how people consume content, where they stop, and whether they reach the CTA.',
   ],
   journey: [
-    'Before and after click',
+    'Message-level action path',
     'Action journey',
-    'Separate message effectiveness from downstream destination performance.',
-  ],
-  segments: [
-    'Audience intelligence',
-    'Segment comparison',
-    'Find who the inbox works for—and where the experience needs attention.',
-  ],
-  health: [
-    'Experience diagnostics',
-    'Friction & technical health',
-    'Monitor the interaction and delivery issues that quietly suppress outcomes.',
+    'Inspect one message at a time. The journey is complete when its CTA is clicked.',
   ],
 } as const;
 
@@ -196,7 +166,6 @@ function Filters({
 }) {
   const fields = [
     ['period', 'Period', filterOptions.period],
-    ['segment', 'Segment', filterOptions.segment],
     ['messageType', 'Message type', filterOptions.messageType],
     ['platform', 'Platform', filterOptions.platform],
   ] as const;
@@ -236,6 +205,9 @@ function StatCard({
   icon: Icon,
   note,
   favourable,
+  definition = 'Calculated from the selected reporting period.',
+  totalCount,
+  uniqueUsers,
 }: {
   label: string;
   value: string;
@@ -243,11 +215,14 @@ function StatCard({
   icon: typeof Eye;
   note?: string;
   favourable?: boolean;
+  definition?: string;
+  totalCount?: number;
+  uniqueUsers?: number;
 }) {
   const positive = delta >= 0;
   const improved = favourable ?? positive;
   return (
-    <article className="kpi-card">
+    <article className="kpi-card metric-with-hover" tabIndex={0}>
       <div className="kpi-label">
         <span>{label}</span>
         <span className="kpi-icon">
@@ -262,8 +237,90 @@ function StatCard({
         </span>
         {note || 'vs previous period'}
       </p>
+      <div className="metric-hover-card" role="tooltip">
+        <span className="metric-hover-title">
+          <Info size={13} />
+          How this is calculated
+        </span>
+        <p>{definition}</p>
+        {(totalCount !== undefined || uniqueUsers !== undefined) && (
+          <div className="metric-hover-counts">
+            {totalCount !== undefined && (
+              <span>
+                <small>Absolute total</small>
+                <strong>{formatAbsolute(totalCount)}</strong>
+              </span>
+            )}
+            {uniqueUsers !== undefined && (
+              <span>
+                <small>Unique users</small>
+                <strong>{formatAbsolute(uniqueUsers)}</strong>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
     </article>
   );
+}
+
+function MetricDetailCard({
+  label,
+  value,
+  note,
+  definition,
+  totalCount,
+  uniqueUsers,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  definition: string;
+  totalCount?: number;
+  uniqueUsers?: number;
+}) {
+  return (
+    <article className="metric-with-hover" tabIndex={0}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{note}</small>
+      <div className="metric-hover-card" role="tooltip">
+        <span className="metric-hover-title">
+          <Info size={13} />
+          How this is calculated
+        </span>
+        <p>{definition}</p>
+        {(totalCount !== undefined || uniqueUsers !== undefined) && (
+          <div className="metric-hover-counts">
+            {totalCount !== undefined && (
+              <span>
+                <small>Absolute total</small>
+                <strong>{formatAbsolute(totalCount)}</strong>
+              </span>
+            )}
+            {uniqueUsers !== undefined && (
+              <span>
+                <small>Unique users</small>
+                <strong>{formatAbsolute(uniqueUsers)}</strong>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function formatAbsolute(value: number) {
+  return new Intl.NumberFormat('en-SG').format(value);
+}
+
+function estimatedTotalEvents(uniqueUsers: number, repeatFactor: number) {
+  return Math.round(uniqueUsers * repeatFactor);
+}
+
+function messageSignal(record: MessageRecord) {
+  return record.priority === 'High' ? 'Important' : 'Null';
 }
 
 function TimingBarList({
@@ -399,6 +456,9 @@ function Overview({
           delta={5.8}
           icon={Inbox}
           note={formatPercent(metrics.exposureRate) + ' active-user reach'}
+          definition="All message deliveries recorded in the selected period. A person can receive more than one message."
+          totalCount={metrics.delivered}
+          uniqueUsers={Math.round(metrics.delivered * 0.81)}
         />
         <StatCard
           label="Engagement Rate"
@@ -406,6 +466,9 @@ function Overview({
           delta={4.2}
           icon={Eye}
           note="unique opens ÷ delivered"
+          definition="Unique users who opened a delivered message, divided by all delivered messages."
+          totalCount={estimatedTotalEvents(metrics.opened, 1.24)}
+          uniqueUsers={metrics.opened}
         />
         <StatCard
           label="Median time to open"
@@ -414,6 +477,9 @@ function Overview({
           favourable
           icon={Clock3}
           note="among recipients who opened"
+          definition="The median bucket from delivery to a user’s first open. Users who never opened are excluded from the median."
+          totalCount={estimatedTotalEvents(metrics.opened, 1.24)}
+          uniqueUsers={metrics.opened}
         />
         <StatCard
           label="Median open to action click"
@@ -428,6 +494,9 @@ function Overview({
           favourable
           icon={MousePointerClick}
           note="among recipients who action-clicked"
+          definition="The median duration from a user’s first open to their first CTA click, for messages that contain a CTA."
+          totalCount={estimatedTotalEvents(metrics.clicked, 1.18)}
+          uniqueUsers={metrics.clicked}
         />
       </section>
       <section className="timing-grid" aria-label="Message timing distributions">
@@ -475,7 +544,7 @@ function Overview({
           <span>Rank & message</span>
           <span>Delivered</span>
           <span>Engagement</span>
-          <span>CTA conversion</span>
+          <span>CTA click rate</span>
         </div>
         <div className="ranking-list">
           {best.map((record, index) => {
@@ -490,7 +559,7 @@ function Overview({
                   <span>
                     <strong>{record.name}</strong>
                     <small>
-                      {record.audience} · {record.type}
+                      {record.sender} · {record.type}
                     </small>
                   </span>
                 </span>
@@ -506,8 +575,8 @@ function Overview({
           })}
         </div>
         <p className="definition-note">
-          Engagement is unique opens ÷ delivered. CTA conversion includes only messages with a CTA
-          and uses opens as its denominator.
+          Engagement is unique opens ÷ delivered. CTA click rate includes only messages with a CTA
+          and uses unique opens as its denominator.
         </p>
       </Panel>
     </>
@@ -529,7 +598,7 @@ function MessagesPage({
     () =>
       records
         .filter((record) =>
-          [record.name, record.sender, record.audience].some((value) =>
+          [record.name, record.sender].some((value) =>
             value.toLowerCase().includes(search.toLowerCase()),
           ),
         )
@@ -558,7 +627,7 @@ function MessagesPage({
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search messages, senders, audiences"
+            placeholder="Search messages or senders"
             aria-label="Search delivered messages"
           />
         </label>
@@ -568,7 +637,7 @@ function MessagesPage({
             <option value="newest">Newest delivered</option>
             <option value="delivered">Delivery volume</option>
             <option value="engagement">Engagement</option>
-            <option value="ctaConversion">CTA conversion</option>
+            <option value="ctaConversion">CTA click rate</option>
           </select>
         </label>
       </div>
@@ -581,11 +650,10 @@ function MessagesPage({
               <tr>
                 <th>Delivered at</th>
                 <th>Message</th>
-                <th>Audience</th>
-                <th>Status</th>
+                <th>Message signal</th>
                 <th>Delivered</th>
                 <th>Engagement</th>
-                <th>CTA conversion</th>
+                <th>CTA click rate</th>
                 <th>CTA</th>
               </tr>
             </thead>
@@ -615,36 +683,32 @@ function MessagesPage({
                     </td>
                     <td>
                       <Link className="table-row-link" to={href}>
-                        {record.audience}
-                      </Link>
-                    </td>
-                    <td>
-                      <Link className="table-row-link" to={href}>
-                        <span
-                          className={
-                            'status-badge ' + (record.status === 'Delivered' ? 'good' : 'warning')
-                          }
-                        >
-                          {record.status}
+                        <span className={'signal-badge ' + messageSignal(record).toLowerCase()}>
+                          {messageSignal(record)}
                         </span>
                       </Link>
                     </td>
                     <td>
-                      <Link className="table-row-link" to={href}>
+                      <Link className="table-row-link table-metric" to={href}>
                         {formatCompact(record.delivered)}
+                        <small>{formatAbsolute(record.delivered)} total</small>
                       </Link>
                     </td>
                     <td>
-                      <Link className="table-row-link" to={href}>
+                      <Link className="table-row-link table-metric" to={href}>
                         <strong>{formatPercent(record.engagement)}</strong>
+                        <small>{formatAbsolute(record.opened)} unique users</small>
                       </Link>
                     </td>
                     <td>
-                      <Link className="table-row-link" to={href}>
+                      <Link className="table-row-link table-metric" to={href}>
                         {record.hasCTA ? (
-                          <span className="conversion-cell">
-                            {formatPercent(record.ctaConversion)}
-                          </span>
+                          <>
+                            <span className="conversion-cell">
+                              {formatPercent(record.ctaConversion)}
+                            </span>
+                            <small>{formatAbsolute(record.clicked)} unique users</small>
+                          </>
                         ) : (
                           <span className="no-cta">No action button</span>
                         )}
@@ -727,18 +791,13 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
       <section className="message-hero">
         <div>
           <div className="message-badges">
-            <span
-              className={'status-badge ' + (record.status === 'Delivered' ? 'good' : 'warning')}
-            >
-              {record.status}
+            <span className={'signal-badge ' + messageSignal(record).toLowerCase()}>
+              {messageSignal(record)} signal
             </span>
             <span className="soft-badge">{record.type}</span>
-            <span className="soft-badge">{record.priority} priority</span>
           </div>
           <h2>{record.name}</h2>
-          <p>
-            Sent by {record.sender} to {record.audience}
-          </p>
+          <p>Sent by {record.sender}</p>
         </div>
         <div className="delivery-stamp">
           <small>Delivered</small>
@@ -747,36 +806,46 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
         </div>
       </section>
       <section className="detail-kpis" aria-label="Message performance metrics">
-        <article>
-          <span>Delivered volume</span>
-          <strong>{formatCompact(record.delivered)}</strong>
-          <small>
-            {record.platform} · {record.segment} users
-          </small>
-        </article>
-        <article>
-          <span>Engagement Rate</span>
-          <strong>{formatPercent(safeRate(record.opened, record.delivered))}</strong>
-          <small>{formatCompact(record.opened)} unique opens</small>
-        </article>
-        <article>
-          <span>CTA Conversion</span>
-          <strong>
-            {record.hasCTA
+        <MetricDetailCard
+          label="Delivered volume"
+          value={formatCompact(record.delivered)}
+          note={`${record.platform} delivery events`}
+          definition="All deliveries recorded for this message. Unique recipients are de-duplicated by user ID."
+          totalCount={record.delivered}
+          uniqueUsers={Math.round(record.delivered * 0.81)}
+        />
+        <MetricDetailCard
+          label="Engagement Rate"
+          value={formatPercent(safeRate(record.opened, record.delivered))}
+          note={`${formatCompact(record.opened)} unique opens`}
+          definition="Unique users who opened this message divided by all delivery events."
+          totalCount={estimatedTotalEvents(record.opened, 1.24)}
+          uniqueUsers={record.opened}
+        />
+        <MetricDetailCard
+          label="CTA click rate"
+          value={
+            record.hasCTA
               ? formatPercent(safeRate(record.clicked, record.opened))
-              : 'No action button'}
-          </strong>
-          <small>
-            {record.hasCTA
-              ? formatCompact(record.clicked) + ' clicks ÷ opens'
-              : 'Excluded from CTA metrics'}
-          </small>
-        </article>
-        <article>
-          <span>Median time to first open</span>
-          <strong>{medianTimingBucket(timing.timeToFirstOpen, 'Never')}</strong>
-          <small>Among messages that were opened</small>
-        </article>
+              : 'No action button'
+          }
+          note={
+            record.hasCTA
+              ? formatCompact(record.clicked) + ' unique clickers ÷ unique opens'
+              : 'Excluded from CTA metrics'
+          }
+          definition="Unique users who clicked the CTA divided by unique users who opened this CTA-bearing message."
+          totalCount={record.hasCTA ? estimatedTotalEvents(record.clicked, 1.18) : 0}
+          uniqueUsers={record.hasCTA ? record.clicked : 0}
+        />
+        <MetricDetailCard
+          label="Median time to first open"
+          value={medianTimingBucket(timing.timeToFirstOpen, 'Never')}
+          note="Among messages that were opened"
+          definition="The median duration from delivery to each user’s first open. Users who never opened are excluded."
+          totalCount={estimatedTotalEvents(record.opened, 1.24)}
+          uniqueUsers={record.opened}
+        />
       </section>
       <section className="detail-grid">
         <Panel
@@ -851,7 +920,7 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
             </>
           )}
         </Panel>
-        <Panel title="Click to conversion" eyebrow="Post-click duration">
+        <Panel title="Click to conversion" eyebrow="Last qualifying CTA click → nearest conversion">
           {record.hasCTA ? (
             <DistributionChart data={timing.clickToConvert} color="#7569d8" />
           ) : (
@@ -864,8 +933,9 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
           {record.hasCTA && (
             <p className="panel-note">
               <Target size={14} />
-              {formatCompact(record.completed)} completed actions from{' '}
-              {formatCompact(record.clicked)} CTA clicks.
+              A conversion is attributed to the user’s last CTA click before the nearest qualifying
+              conversion. {formatAbsolute(record.completed)} unique conversions are linked from{' '}
+              {formatAbsolute(record.clicked)} unique clickers.
             </p>
           )}
         </Panel>
@@ -877,7 +947,10 @@ function MessageDetailPage({ record, query }: { record: MessageRecord; query: st
 function BehaviourPage({ records }: { records: MessageRecord[] }) {
   if (!records.length) return <EmptyState />;
   const readTime = weightedAverage(records, 'medianReadSeconds');
-  const completion = aggregateMetrics(records, '30').engagedRate;
+  const metrics = aggregateMetrics(records, '30');
+  const fullScrollWithoutClick = Math.round((metrics.opened - metrics.clicked) * 0.37);
+  const completedUsers = Math.min(metrics.opened, metrics.clicked + fullScrollWithoutClick);
+  const completion = safeRate(completedUsers, metrics.opened);
   const repeatOpen = Math.min(34, 18 + records.length * 0.9);
   return (
     <>
@@ -887,25 +960,28 @@ function BehaviourPage({ records }: { records: MessageRecord[] }) {
           value={Math.round(readTime) + 's'}
           delta={6.4}
           icon={Clock3}
+          definition="The median active reading duration across unique users who opened a message."
+          totalCount={estimatedTotalEvents(metrics.opened, 1.24)}
+          uniqueUsers={metrics.opened}
         />
         <StatCard
           label="Content completion"
           value={formatPercent(completion)}
           delta={4.8}
           icon={Target}
-        />
-        <StatCard
-          label="Early abandonment"
-          value="12.6%"
-          delta={-3.1}
-          icon={ArrowDownRight}
-          note="lower is better"
+          note="CTA click or 100% scroll"
+          definition="A user completes the content when they click its CTA or reach 100% scroll. Users meeting both conditions count once."
+          totalCount={estimatedTotalEvents(completedUsers, 1.11)}
+          uniqueUsers={completedUsers}
         />
         <StatCard
           label="Repeat open rate"
           value={formatPercent(repeatOpen)}
           delta={1.7}
           icon={Eye}
+          definition="Unique users who reopened a message divided by unique users who opened it at least once."
+          totalCount={estimatedTotalEvents(Math.round((repeatOpen / 100) * metrics.opened), 1.42)}
+          uniqueUsers={Math.round((repeatOpen / 100) * metrics.opened)}
         />
       </section>
       <section className="two-column-grid">
@@ -983,361 +1059,141 @@ function BehaviourPage({ records }: { records: MessageRecord[] }) {
             </ResponsiveContainer>
           </div>
         </Panel>
-        <Panel title="Inbox position effect" eyebrow="Visibility analysis">
-          <div className="chart-medium">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={positionPerformance}
-                margin={{ top: 8, right: 8, left: -24, bottom: 0 }}
-              >
-                <CartesianGrid vertical={false} stroke="#eef1f5" />
-                <XAxis
-                  dataKey="position"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 10, fill: '#7f899b' }}
-                />
-                <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 9, fill: '#9aa2b0' }} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: 10 }} />
-                <Line
-                  type="monotone"
-                  dataKey="exposure"
-                  stroke="#3976e8"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="open"
-                  stroke="#836fe7"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <p className="panel-note warning">
-            <Activity size={14} />
-            Position #1 receives 14× the open rate of messages below position 10.
-          </p>
-        </Panel>
       </section>
     </>
   );
 }
 
 function JourneyPage({ records }: { records: MessageRecord[] }) {
+  const [selectedId, setSelectedId] = useState(
+    () => records.find((record) => messageSignal(record) === 'Important')?.id || records[0]?.id,
+  );
   if (!records.length) return <EmptyState />;
-  const metrics = aggregateMetrics(records, '30');
-  const landingLoaded = Math.round(metrics.clicked * 0.94);
-  const started = Math.round(landingLoaded * 0.76);
-  const completed = metrics.completed;
+  const selected = records.find((record) => record.id === selectedId) || records[0];
   const stages = [
-    ['Message open', metrics.opened, 100, 'Message'],
-    ['CTA exposed', metrics.ctaExposed, safeRate(metrics.ctaExposed, metrics.opened), 'Message'],
-    ['CTA clicked', metrics.clicked, safeRate(metrics.clicked, metrics.ctaExposed), 'Message'],
-    ['Page loaded', landingLoaded, safeRate(landingLoaded, metrics.clicked), 'Destination'],
-    ['Started action', started, safeRate(started, landingLoaded), 'Destination'],
-    ['Completed', completed, safeRate(completed, started), 'Outcome'],
+    ['Message open', selected.opened, 100, 1.24],
+    ['CTA exposed', selected.ctaExposed, safeRate(selected.ctaExposed, selected.opened), 1.08],
+    ['CTA clicked', selected.clicked, safeRate(selected.clicked, selected.ctaExposed), 1.18],
   ];
   return (
     <>
       <Panel
-        title="Full action journey"
-        eyebrow="Message → destination → outcome"
-        action={<span className="status-badge good">Healthy message</span>}
+        title="Message action journey"
+        eyebrow="One specific message · journey ends at CTA click"
+        action={
+          <label className="journey-picker">
+            Message
+            <select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
+              {records.map((record) => (
+                <option value={record.id} key={record.id}>
+                  {record.name} · {messageSignal(record)}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
       >
-        <div className="journey-stages">
-          {stages.map(([label, value, rate, group], index) => (
-            <div className="journey-stage" key={String(label)}>
-              <span className={'journey-group ' + String(group).toLowerCase()}>{group}</span>
-              <div className="journey-node">
-                <span>{index + 1}</span>
-              </div>
-              <small>{label}</small>
-              <strong>{formatCompact(Number(value))}</strong>
-              <em>{index === 0 ? 'Baseline' : formatPercent(Number(rate)) + ' from prior'}</em>
-            </div>
-          ))}
+        <div className="journey-message-context">
+          <span className={'signal-badge ' + messageSignal(selected).toLowerCase()}>
+            {messageSignal(selected)} signal
+          </span>
+          <p>
+            <strong>{selected.name}</strong>
+            <small>
+              {selected.sender} · {selected.type}
+            </small>
+          </p>
         </div>
-      </Panel>
-      <section className="journey-grid">
-        <Panel title="Where conversion is lost" eyebrow="Stage diagnosis">
-          <div className="dropoff-list">
-            {[
-              [
-                'Open → CTA visible',
-                safeRate(metrics.ctaExposed, metrics.opened),
-                metrics.opened - metrics.ctaExposed,
-              ],
-              ['CTA visible → click', metrics.ctaRate, metrics.ctaExposed - metrics.clicked],
-              [
-                'Click → page load',
-                safeRate(landingLoaded, metrics.clicked),
-                metrics.clicked - landingLoaded,
-              ],
-              ['Load → start', safeRate(started, landingLoaded), landingLoaded - started],
-              ['Start → complete', safeRate(completed, started), started - completed],
-            ].map(([label, rate, lost]) => (
-              <div key={String(label)}>
-                <span>{label}</span>
-                <div className="dropoff-bar">
-                  <i style={{ width: String(rate) + '%' }} />
+        {!selected.hasCTA ? (
+          <div className="timing-empty compact">
+            <MousePointerClick size={20} />
+            <strong>No action journey</strong>
+            <span>This message has no CTA, so its action signal is null.</span>
+          </div>
+        ) : (
+          <div className="journey-stages three-stages">
+            {stages.map(([label, value, rate, repeatFactor], index) => (
+              <div className="journey-stage metric-with-hover" tabIndex={0} key={String(label)}>
+                <span className="journey-group message">Message</span>
+                <div className="journey-node">
+                  <span>{index + 1}</span>
                 </div>
-                <strong>{formatPercent(Number(rate))}</strong>
-                <small>{formatCompact(Number(lost))} lost</small>
+                <small>{label}</small>
+                <strong>{formatCompact(Number(value))}</strong>
+                <em>{index === 0 ? 'Baseline' : formatPercent(Number(rate)) + ' from prior'}</em>
+                <div className="metric-hover-card" role="tooltip">
+                  <span className="metric-hover-title">
+                    <Info size={13} />
+                    {label}
+                  </span>
+                  <p>Counts are de-duplicated by user for this selected message.</p>
+                  <div className="metric-hover-counts">
+                    <span>
+                      <small>Absolute total</small>
+                      <strong>
+                        {formatAbsolute(estimatedTotalEvents(Number(value), Number(repeatFactor)))}
+                      </strong>
+                    </span>
+                    <span>
+                      <small>Unique users</small>
+                      <strong>{formatAbsolute(Number(value))}</strong>
+                    </span>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
-        </Panel>
-        <Panel title="Message vs destination" eyebrow="Ownership">
-          <div className="ownership-grid">
-            <div className="ownership-card good">
-              <span>
-                <MessageSquareText size={16} />
-                Message experience
-              </span>
-              <strong>{formatPercent(metrics.ctaRate)}</strong>
-              <small>CTA visible → click</small>
-              <p>Strong intent creation. Copy and CTA are working.</p>
+        )}
+      </Panel>
+      <section className="journey-grid">
+        <Panel title="Where clicks are lost" eyebrow="Selected message only">
+          {selected.hasCTA ? (
+            <div className="dropoff-list">
+              {[
+                [
+                  'Open → CTA visible',
+                  safeRate(selected.ctaExposed, selected.opened),
+                  selected.opened - selected.ctaExposed,
+                ],
+                [
+                  'CTA visible → click',
+                  safeRate(selected.clicked, selected.ctaExposed),
+                  selected.ctaExposed - selected.clicked,
+                ],
+              ].map(([label, rate, lost]) => (
+                <div key={String(label)}>
+                  <span>{label}</span>
+                  <div className="dropoff-bar">
+                    <i style={{ width: String(rate) + '%' }} />
+                  </div>
+                  <strong>{formatPercent(Number(rate))}</strong>
+                  <small>{formatAbsolute(Number(lost))} users</small>
+                </div>
+              ))}
             </div>
-            <div className="ownership-card warning">
-              <span>
-                <Route size={16} />
-                Destination experience
-              </span>
-              <strong>{formatPercent(safeRate(completed, landingLoaded))}</strong>
-              <small>Page loaded → completion</small>
-              <p>Primary constraint. Review form length and page load.</p>
+          ) : (
+            <div className="chart-empty compact">
+              <span>No CTA stages to diagnose.</span>
+            </div>
+          )}
+        </Panel>
+        <Panel title="Task tracking contract" eyebrow="Mini-service instrumentation">
+          <div className="tracking-contract">
+            <span className="tracking-event">start_action</span>
+            <div>
+              <strong>API expansion required</strong>
+              <p>
+                Track the action start inside the mini-service and send the message ID, user ID,
+                task ID and event timestamp.
+              </p>
             </div>
           </div>
           <div className="callout">
-            <Sparkles size={17} />
+            <Route size={17} />
             <p>
-              <strong>Diagnosis:</strong> Messaging is generating qualified clicks. Most remaining
-              opportunity sits after the destination loads.
+              <strong>Boundary:</strong> The message Action journey ends at CTA click. Downstream
+              task events are tracked separately and can be joined using the message and task IDs.
             </p>
-          </div>
-        </Panel>
-      </section>
-    </>
-  );
-}
-
-function SegmentsPage() {
-  const [metric, setMetric] = useState<'reach' | 'open' | 'cta' | 'conversion'>('open');
-  return (
-    <section className="segments-grid">
-      <Panel
-        title="Who the inbox works for"
-        eyebrow="Segment matrix"
-        className="segment-table-panel"
-      >
-        <div className="data-table-wrap">
-          <table className="data-table segment-table">
-            <thead>
-              <tr>
-                <th>Segment</th>
-                <th>Audience</th>
-                <th>Inbox reach</th>
-                <th>Open</th>
-                <th>CTA</th>
-                <th>Conversion</th>
-                <th>Trend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {segmentRows.map((row) => (
-                <tr key={row.name}>
-                  <td>
-                    <div className="segment-name">
-                      <span>{row.name.charAt(0)}</span>
-                      <strong>{row.name}</strong>
-                    </div>
-                  </td>
-                  <td>{row.users}</td>
-                  <td>{row.reach}%</td>
-                  <td>
-                    <strong>{row.open}%</strong>
-                  </td>
-                  <td>{row.cta}%</td>
-                  <td>
-                    <span className="conversion-cell">{row.conversion}%</span>
-                  </td>
-                  <td>
-                    <span className={row.trend >= 0 ? 'delta up' : 'delta down'}>
-                      {row.trend >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{' '}
-                      {Math.abs(row.trend)}%
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-      <Panel
-        title="Segment comparison"
-        eyebrow="Selected metric"
-        action={
-          <select
-            className="inline-select"
-            value={metric}
-            onChange={(event) => setMetric(event.target.value as typeof metric)}
-          >
-            <option value="reach">Inbox reach</option>
-            <option value="open">Open rate</option>
-            <option value="cta">CTA rate</option>
-            <option value="conversion">Conversion</option>
-          </select>
-        }
-      >
-        <div className="chart-tall">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={segmentRows}
-              layout="vertical"
-              margin={{ top: 4, right: 15, left: 24, bottom: 0 }}
-            >
-              <XAxis
-                type="number"
-                domain={[0, 100]}
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 9, fill: '#9aa2b0' }}
-              />
-              <YAxis
-                dataKey="name"
-                type="category"
-                width={80}
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 10, fill: '#697488' }}
-              />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey={metric} fill="#477de1" radius={[0, 5, 5, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Panel>
-      <Panel title="Largest audience gap" eyebrow="Recommended focus" className="insight-panel">
-        <div className="insight-hero">
-          <span>
-            <Target size={18} />
-          </span>
-          <div>
-            <h3>Dormant users</h3>
-            <p>
-              Reach is 48 points behind active users, and only 18% of exposed messages are opened.
-            </p>
-          </div>
-        </div>
-        <div className="recommendation">
-          <strong>Test next</strong>
-          <span>Prioritise recency-based ordering and notification timing for dormant users.</span>
-        </div>
-      </Panel>
-    </section>
-  );
-}
-
-function HealthPage({ records }: { records: MessageRecord[] }) {
-  const friction = weightedAverage(records, 'frictionRate');
-  const p95 = weightedAverage(records, 'latencyP95');
-  const latencyData = trendPoints.map((point, index) => ({
-    day: point.day,
-    p50: 260 + index * 4 + (index % 3) * 12,
-    p95: Math.round(p95 * 0.88) + index * 7,
-    p99: Math.round(p95 * 1.45) + index * 10,
-  }));
-  return (
-    <>
-      <section className="metric-strip">
-        <StatCard
-          label="Inbox friction rate"
-          value={formatPercent(friction)}
-          delta={-5.4}
-          icon={MousePointerClick}
-          note="lower is better"
-        />
-        <StatCard label="API success rate" value="99.93%" delta={0.08} icon={ShieldCheck} />
-        <StatCard
-          label="Render failure"
-          value="0.18%"
-          delta={-12.1}
-          icon={Activity}
-          note="lower is better"
-        />
-        <StatCard
-          label="Load latency P95"
-          value={Math.round(p95) + 'ms'}
-          delta={3.4}
-          icon={CircleGauge}
-        />
-      </section>
-      <section className="health-grid">
-        <Panel title="Sessions with friction" eyebrow="Cause breakdown">
-          <div className="friction-bars">
-            {frictionSignals.map((signal, index) => (
-              <div key={signal.name}>
-                <span className="friction-rank">{index + 1}</span>
-                <p>
-                  <strong>{signal.name}</strong>
-                  <small>{formatCompact(signal.sessions)} affected sessions</small>
-                </p>
-                <div>
-                  <i style={{ width: String(signal.share * 2.3) + '%' }} />
-                </div>
-                <b>{signal.share}%</b>
-                <em className={'severity ' + signal.severity.toLowerCase()}>{signal.severity}</em>
-              </div>
-            ))}
-          </div>
-        </Panel>
-        <Panel
-          title="Load latency trend"
-          eyebrow="Milliseconds"
-          action={<span className="status-badge warning">P95 rising</span>}
-        >
-          <div className="chart-tall">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={latencyData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke="#eef1f5" />
-                <XAxis
-                  dataKey="day"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 9, fill: '#929aab' }}
-                  interval={2}
-                />
-                <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 9, fill: '#929aab' }} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: 10 }} />
-                <Line type="monotone" dataKey="p50" stroke="#78a0e8" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="p95" stroke="#3976e8" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="p99" stroke="#826ee1" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-        <Panel title="Technical signal status" eyebrow="Latest 30 days" className="wide-panel">
-          <div className="technical-grid">
-            {[
-              ['Inbox API', '99.93%', 'success rate', 'good'],
-              ['Message rendering', '0.18%', 'failed renders', 'good'],
-              ['CTA navigation', '0.74%', 'destination failure', 'warning'],
-              ['Empty state', '1.30%', 'of inbox sessions', 'neutral'],
-              ['Duplicate messages', '0.06%', 'of delivered', 'good'],
-              ['Analytics events', '0.22%', 'estimated drop rate', 'good'],
-            ].map(([label, value, note, status]) => (
-              <div className="technical-card" key={label}>
-                <span className={'signal-dot ' + status} />
-                <p>{label}</p>
-                <strong>{value}</strong>
-                <small>{note}</small>
-              </div>
-            ))}
           </div>
         </Panel>
       </section>
@@ -1386,8 +1242,6 @@ export default function DashboardApp({
     ),
     behaviour: <BehaviourPage records={filteredRecords} />,
     journey: <JourneyPage records={filteredRecords} />,
-    segments: <SegmentsPage />,
-    health: <HealthPage records={filteredRecords} />,
   }[section];
   const renderNavItems = (items: typeof primaryNavItems) =>
     items.map((item) => {

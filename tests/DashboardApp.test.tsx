@@ -55,10 +55,11 @@ describe('dashboard interactions', () => {
   it('updates the URL when a global filter changes', async () => {
     const user = userEvent.setup();
     render(<DashboardApp section="overview" />);
-    await user.selectOptions(screen.getByLabelText('Segment'), 'new');
+    expect(screen.queryByLabelText('Segment')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Platform'), 'Android');
     await waitFor(() =>
       expect(navigation.navigate).toHaveBeenCalledWith(
-        { pathname: '/', search: '?segment=new' },
+        { pathname: '/', search: '?platform=Android' },
         { replace: true, preventScrollReset: true },
       ),
     );
@@ -124,6 +125,14 @@ describe('dashboard interactions', () => {
     expect(screen.queryByText('SkillsFuture credit update')).not.toBeInTheDocument();
   });
 
+  it('removes audience and delivery status from message history', () => {
+    navigation.pathname = '/messages';
+    render(<DashboardApp section="messages" />);
+    expect(screen.queryByRole('columnheader', { name: 'Audience' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Message signal' })).toBeInTheDocument();
+  });
+
   it('preserves the global query on delivery-history detail links', () => {
     navigation.pathname = '/messages';
     navigation.params = 'segment=active&platform=iOS';
@@ -143,6 +152,26 @@ describe('dashboard interactions', () => {
       screen.getByRole('heading', { name: 'Time from open to action click' }),
     ).toBeInTheDocument();
     expect(screen.getByText('Median time to first open')).toBeInTheDocument();
+    expect(
+      screen.getByText(/last CTA click before the nearest qualifying conversion/i),
+    ).toBeInTheDocument();
+  });
+
+  it('defines content completion as CTA click or full scroll', () => {
+    navigation.pathname = '/behaviour';
+    render(<DashboardApp section="behaviour" />);
+    expect(screen.getByText('CTA click or 100% scroll')).toBeInTheDocument();
+    expect(screen.queryByText('Early abandonment')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inbox position effect')).not.toBeInTheDocument();
+  });
+
+  it('uses a message-specific action journey that ends at CTA click', () => {
+    navigation.pathname = '/journey';
+    render(<DashboardApp section="journey" />);
+    expect(screen.getByLabelText('Message')).toBeInTheDocument();
+    expect(screen.getAllByText('CTA clicked').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Page loaded')).not.toBeInTheDocument();
+    expect(screen.getByText('start_action')).toBeInTheDocument();
   });
 
   it('shows a No action button state on CTA-less message details', () => {
@@ -174,8 +203,6 @@ describe('dashboard interactions', () => {
     ['overview', 'Message Inbox Analytics'],
     ['behaviour', 'Reading behaviour'],
     ['journey', 'Action journey'],
-    ['segments', 'Segment comparison'],
-    ['health', 'Friction & technical health'],
   ] as [DashboardSection, string][])('renders the %s route', (section, heading) => {
     render(<DashboardApp section={section} />);
     expect(screen.getByRole('heading', { name: heading, level: 1 })).toBeInTheDocument();

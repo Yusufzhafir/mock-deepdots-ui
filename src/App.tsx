@@ -21,8 +21,6 @@ export default function App() {
       <Route path="/messages/:id" element={<MessageDetailRoute />} />
       <Route path="/behaviour" element={<DashboardApp section="behaviour" />} />
       <Route path="/journey" element={<DashboardApp section="journey" />} />
-      <Route path="/segments" element={<DashboardApp section="segments" />} />
-      <Route path="/health" element={<DashboardApp section="health" />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
